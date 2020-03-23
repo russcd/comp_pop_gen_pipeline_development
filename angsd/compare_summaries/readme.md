@@ -34,4 +34,4 @@ mean of angsd:	-0.93058366109034
 mean of vcftools:	-1.46709696593033
 spearman's rho:	0.648482250914846
 
-Overall impression is that the strong correlation for pi is promising, but probably lower values of pi and the +-skewed tajima's D is related to reduced ability to resolve lower frequency sites. 
+Overall impression is that the strong correlation for pi is promising, but probably lower values of pi and the +-skewed tajima's D is likely related to reduced ability to resolve lower frequency sites. 
