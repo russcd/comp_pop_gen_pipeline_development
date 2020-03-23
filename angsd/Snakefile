@@ -1,1 +1,123 @@
-### snakefile
+### need to make firm choices about the final directory structure
+##### do we want to keep it the same, then hardcoding is probably pretty safe and certainly easier to debug/maintain
+
+### dependencies:
+#### angsd version 0.931
+#### ngsRelate
+rule all:
+    input:
+        "{species}/angsd/{species}.qc"
+
+### create bamlist for angsd
+rule create_bamlist:
+    input:
+         "{species}"
+    output:
+         "{species}/angsd/bam.list"
+    shell:
+         "ls {input[0]}/dedup/*.bam | grep subsampled > {output}"
+
+### create angsd genotype likelihood file
+### looks like the number of actually used threads tops out around 10 on our server. Not sure if it's I/O bound or what. 
+rule angsd_gl:
+    input:
+        "{species}/angsd/bam.list" 
+    threads:
+        20
+    output:
+        "{species}/angsd/{species}_gl.mafs.gz",
+        "{species}/angsd/{species}_gl.beagle.gz"
+    benchmark:
+        "{species}/angsd/{species}_angsd-gl_benchmark.tsv"
+    shell:
+        "angsd -GL 2 -out {wildcards.species}/angsd/{wildcards.species}_gl -nThreads {threads} -doGlf 2 -doMajorMinor 1 -doMaf 1 -SNP_pval 1e-6 -minMapQ 20 -minQ 13 -bam {input}"
+
+### now do the ngsADMIX things
+rule ngs_admix:
+    input:
+        "{species}/angsd/{species}_gl.beagle.gz"
+    threads:
+        20
+    output:
+        "{species}/angsd/{species}.NGSadmix.K2.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K3.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K4.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K5.fopt.gz"
+    benchmark:
+        "{species}/angsd/{species}_NGSadmix.tsv"
+    run:
+        shell("NGSadmix -likes {input} -K 2 -P {threads} -outfiles {wildcards.species}/angsd/{wildcards.species}.NGSadmix.K2")
+        shell("NGSadmix -likes {input} -K 3 -P {threads} -outfiles {wildcards.species}/angsd/{wildcards.species}.NGSadmix.K3")
+        shell("NGSadmix -likes {input} -K 4 -P {threads} -outfiles {wildcards.species}/angsd/{wildcards.species}.NGSadmix.K4")
+        shell("NGSadmix -likes {input} -K 5 -P {threads} -outfiles {wildcards.species}/angsd/{wildcards.species}.NGSadmix.K5")
+
+### PCA this thing
+rule pcangsd:
+    input:
+        "{species}/angsd/{species}_gl.beagle.gz"
+    threads:
+        20
+    output:
+        "{species}/angsd/{species}.pcangsd.cov"
+    benchmark:
+        "{species}/angsd/{species}_pcangsd.tsv"
+    shell:
+        "python ~/pcangsd/pcangsd.py -beagle {input} -threads {threads} -o {wildcards.species}/angsd/{wildcards.species}.pcangsd"
+
+### NGSrelate
+rule ngsrelate:
+    input:
+        "{species}/angsd/bam.list"
+    threads:
+        20
+    output:
+        "{species}/angsd/{species}_gl4relate.glf.gz",
+        "{species}/angsd/{species}_gl4relate.mafs.gz",
+        temp("{species}/angsd/freq"),
+        "{species}/angsd/{species}.newres"
+    benchmark:
+        "{species}/angsd/{species}_ngsrelate.tsv"
+    run:
+        shell("angsd -GL 2 -out {wildcards.species}/angsd/{wildcards.species}_gl4relate -P {threads} -doGlf 3 -doMajorMinor 1 -doMaf 1 -SNP_pval 1e-6 -minMapQ 20 -minQ 13 -bam {input}")
+        shell("zcat {output[1]} | cut -f5 |sed 1d > {output[2]}")
+        shell("ngsRelate -p {threads} -g {output[0]} -n <( wc -l {input} ) -f {output[2]} -O {output[3]}")
+
+### popgen stats
+rule thetas:
+    input:
+        "{species}/angsd/bam.list",
+    threads:
+        20
+    output:
+        "{species}/angsd/{species}.outfold.saf.gz",
+        "{species}/angsd/{species}.outfold.sfs",
+        "{species}/angsd/{species}.outfold.windows.1kb.pestPG",
+        "{species}/angsd/{species}.outfold.windows.10kb.pestPG",
+        "{species}/angsd/{species}.outfold.windows.100kb.pestPG"
+    benchmark:
+        "{species}/angsd/{species}_thetas.tsv"
+    run:                                #### genome hardcoded for now, don't like, how to generalize?
+        shell("angsd -bam {input} -doSaf 1 -anc {wildcards.species}/genome/*.fa -GL 1 -P {threads} -out {wildcards.species}/angsd/{wildcards.species}.outfold -fold 1")
+        shell("realSFS {wildcards.species}/angsd/{wildcards.species}.outfold.saf.idx -P {threads} > {output[1]}")
+        shell("angsd -bam {input} -out {wildcards.species}/angsd/{wildcards.species}.outfold -P {threads} -doThetas 1 -doSaf 1 -pest {output[1]} -anc {wildcards.species}/genome/*.fa -GL 1 -fold 1")
+        shell("thetaStat do_stat {wildcards.species}/angsd/{wildcards.species}.outfold.thetas.idx -win 1000 -step 1000 -outnames {wildcards.species}/angsd/{wildcards.species}.outfold.windows.1kb")
+        shell("thetaStat do_stat {wildcards.species}/angsd/{wildcards.species}.outfold.thetas.idx -win 10000 -step 10000 -outnames {wildcards.species}/angsd/{wildcards.species}.outfold.windows.10kb")                                       
+        shell("thetaStat do_stat {wildcards.species}/angsd/{wildcards.species}.outfold.thetas.idx -win 100000 -step 100000 -outnames {wildcards.species}/angsd/{wildcards.species}.outfold.windows.100kb")                                       
+
+### plot all
+### dummy function for now to ensure all above steps are required
+rule plot:
+    input:
+        "{species}/angsd/{species}.pcangsd.cov",
+        "{species}/angsd/{species}.newres",
+        "{species}/angsd/{species}.NGSadmix.K2.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K3.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K4.fopt.gz",
+        "{species}/angsd/{species}.NGSadmix.K5.fopt.gz",
+        "{species}/angsd/{species}.outfold.windows.1kb.pestPG",
+        "{species}/angsd/{species}.outfold.windows.10kb.pestPG",
+        "{species}/angsd/{species}.outfold.windows.100kb.pestPG"
+    output:
+        "{species}/angsd/{species}.qc"
+    shell:
+        "touch {output}"
